@@ -1,0 +1,11 @@
+customtkinter
+requests
+Pillow
+folium
+geopandas
+fiona
+shapely
+pyproj
+pandas
+matplotlib
+numpy
