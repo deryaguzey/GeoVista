@@ -1058,7 +1058,14 @@ class SafetyLabPage(Page):
         except: lat,lon=36.897,30.647
         max_h=30.0
         self.sim_status.configure(text="🌊 Taşkın Analizi Başlatılıyor...")
-        self._last_res = {"type":"FeatureCollection","features":[{"type":"Feature","properties":{"Analiz":"Sel ve Taşkın Simülasyonu (v5.4)","Durum":"Tamamlandı"},"geometry":{"type":"Point","coordinates":[lon,lat]}}]}
+        self._last_res = {
+            "type": "FeatureCollection",
+            "features": [
+                {"type":"Feature","properties":{"Zon":"GÜVENLİ","Risk":"Düşük"},"geometry":{"type":"Polygon","coordinates":[[[lon-0.08,lat+0.08],[lon+0.08,lat+0.08],[lon+0.08,lat-0.08],[lon-0.08,lat-0.08],[lon-0.08,lat+0.08]]]}},
+                {"type":"Feature","properties":{"Zon":"YÜKSEK RİSK","Risk":"Kritik"},"geometry":{"type":"Polygon","coordinates":[[[lon-0.018,lat-0.007],[lon-0.004,lat-0.007],[lon-0.004,lat+0.007],[lon-0.018,lat+0.007],[lon-0.018,lat-0.007]]]}},
+                {"type":"Feature","properties":{"Zon":"ORTA RİSK","Risk":"Orta"},"geometry":{"type":"Polygon","coordinates":[[[lon+0.006,lat-0.013],[lon+0.022,lat-0.013],[lon+0.022,lat+0.005],[lon+0.006,lat+0.005],[lon+0.006,lat-0.013]]]}}
+            ]
+        }
         html = f"""
 <!DOCTYPE html><html><head><meta charset='utf-8'><title>GeoVista Sel v5.4</title>
 <script src='https://unpkg.com/maplibre-gl@4.1.2/dist/maplibre-gl.js'></script>
@@ -1196,7 +1203,34 @@ map.on('load',()=>{{
         except: lat,lon=36.897,30.647
         mw=self.eq_mw.get() or "7.5"
         self.sim_status.configure(text=f"⚡ Sismik {mw} Mw - Güvenlik Analizi...")
-        self._last_res = {"type":"FeatureCollection","features":[{"type":"Feature","properties":{"Analiz":f"Deprem Hasar Analizi ({mw} Mw)","Durum":"Tamamlandı"},"geometry":{"type":"Point","coordinates":[lon,lat]}}]}
+        # ArcGIS Export için Poligon Verisi Üret (Çemberler)
+        def _get_py_circle(clon, clat, r_deg):
+            pts = []
+            import math
+            rad = math.pi / 180
+            for i in range(41):
+                a = 2 * math.pi * i / 40
+                dx = r_deg * math.cos(a) / math.cos(clat * rad)
+                dy = r_deg * math.sin(a)
+                pts.append([clon + dx, clat + dy])
+            return [pts]
+
+        try: m_val = float(mw)
+        except: m_val = 7.5
+        
+        scale = math.pow(m_val / 5.0, 3)
+        r1 = 0.002 + scale * 0.004
+        r2, r3 = r1 * 2.2, r1 * 4.0
+
+        self._last_res = {
+            "type": "FeatureCollection",
+            "features": [
+                {"type":"Feature","properties":{"Risk":"DÜŞÜK","Zon":"Yeşil"},"geometry":{"type":"Polygon","coordinates":_get_py_circle(lon,lat,r3)}},
+                {"type":"Feature","properties":{"Risk":"ORTA","Zon":"Turuncu"},"geometry":{"type":"Polygon","coordinates":_get_py_circle(lon,lat,r2)}},
+                {"type":"Feature","properties":{"Risk":"YÜKSEK","Zon":"Kırmızı"},"geometry":{"type":"Polygon","coordinates":_get_py_circle(lon,lat,r1)}},
+                {"type":"Feature","properties":{"Tip":"Merkez","Mw":m_val},"geometry":{"type":"Point","coordinates":[lon,lat]}}
+            ]
+        }
 
         html = f"""
 <!DOCTYPE html><html><head><meta charset='utf-8'><title>GeoVista Deprem v5.3</title>
@@ -1453,7 +1487,14 @@ map.on('load', () => {{
         try: lat,lon=float(self.sl_lat.get()),float(self.sl_lon.get())
         except: lat,lon=36.897,30.647
         self.sim_status.configure(text="⛰️ Heyelan Risk Haritası Yükleniyor...")
-        self._last_res = {"type":"FeatureCollection","features":[{"type":"Feature","properties":{"Analiz":"Heyelan ve Toprak Kayması Analizi","Durum":"Tamamlandı"},"geometry":{"type":"Point","coordinates":[lon,lat]}}]}
+        # Heyelan Poligonu (Temsili risk alanı)
+        self._last_res = {
+            "type": "FeatureCollection",
+            "features": [
+                {"type":"Feature","properties":{"Risk":"ÇOK YÜKSEK","Eğim":">35°"},"geometry":{"type":"Polygon","coordinates":[[[lon-0.012,lat+0.005],[lon+0.008,lat+0.01],[lon+0.015,lat-0.005],[lon-0.005,lat-0.01],[lon-0.012,lat+0.005]]]}},
+                {"type":"Feature","properties":{"Sınıf":"Analiz Merkezi","Koor":f"{lat},{lon}"},"geometry":{"type":"Point","coordinates":[lon,lat]}}
+            ]
+        }
         html = f"""
 <!DOCTYPE html><html><head><meta charset='utf-8'><title>GeoVista Heyelan Risk v5.4</title>
 <script src='https://unpkg.com/maplibre-gl@4.1.2/dist/maplibre-gl.js'></script>
@@ -1588,11 +1629,55 @@ map.on('load', ()=>{{
         self.sim_status.configure(text="✅ Heyelan Risk Haritası Aktif!")
 
     def _export_disaster(self):
-        if not self._last_res: messagebox.showwarning("Uyarı","Dışa aktarılacak analiz sonucu bulunamadı!"); return
-        p=filedialog.asksaveasfilename(defaultextension=".geojson",filetypes=[("GeoJSON","*.geojson")])
-        if p:
-            with open(p,"w",encoding="utf-8") as f: json.dump(self._last_res,f,ensure_ascii=False,indent=2)
-            messagebox.showinfo("Başarılı","Analiz sonucu ArcGIS/QGIS uyumlu kaydedildi.")
+        if not self._last_res: 
+            messagebox.showwarning("Uyarı","Dışa aktarılacak analiz sonucu bulunamadı!")
+            return
+            
+        p = filedialog.asksaveasfilename(
+            defaultextension=".shp",
+            filetypes=[
+                ("ESRI Shapefile (ArcGIS)","*.shp"),
+                ("Keyhole Markup Language (KML)","*.kml"),
+                ("GeoJSON","*.geojson")
+            ]
+        )
+        if not p: return
+
+        try:
+            import geopandas as gpd
+            from shapely.geometry import shape
+            
+            # Veriyi GeoDataFrame'e dönüştür
+            features = self._last_res.get("features", [])
+            geoms = [shape(f["geometry"]) for f in features]
+            props = [f["properties"] for f in features]
+            
+            # Shapefile için kolon isimlerini 10 karakterle sınırla (ArcGIS standardı)
+            clean_props = []
+            for item in props:
+                clean_item = {str(k)[:10]: str(v) for k, v in item.items()}
+                clean_props.append(clean_item)
+
+            gdf = gpd.GeoDataFrame(clean_props, geometry=geoms, crs="EPSG:4326")
+            
+            if p.endswith(".shp"):
+                gdf.to_file(p, driver="ESRI Shapefile")
+            elif p.endswith(".kml"):
+                import fiona
+                if 'KML' not in fiona.supported_drivers:
+                    fiona.supported_drivers['KML'] = 'rw'
+                gdf.to_file(p, driver='KML')
+            else:
+                gdf.to_file(p, driver='GeoJSON')
+                
+            messagebox.showinfo("Başarılı", f"Analiz sonucu ArcGIS uyumlu ({p.split('.')[-1].upper()}) kaydedildi.")
+        except Exception as e:
+            # Geopandas hatası durumunda düz JSON/GeoJSON kaydetme (Fallback)
+            if not p.endswith(".geojson"):
+                p = p.rsplit(".",1)[0] + ".geojson"
+            with open(p,"w",encoding="utf-8") as f: 
+                json.dump(self._last_res,f,ensure_ascii=False,indent=2)
+            messagebox.showwarning("Başarılı (Kısıtlı)","Gelişmiş formatta kaydedilemedi (Kütüphane eksik), GeoJSON olarak kaydedildi.")
     
     def _stop_sim(self): self._run_sim=False
 
