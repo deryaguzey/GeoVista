@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-GeoVista V5.4: Profesyonel CBS (GIS) Platformu
+GeoVista V3.0: Profesyonel CBS (GIS) Platformu
 Geliştirici: Derya Güzey (deryaguzey2@gmail.com)
 Lisans: MIT
-Versiyon: 5.4.0 (GitHub Official Edition)
+Versiyon: 3.0.0 (Scientific Edition)
 GitHub: https://github.com/deryaguzey/GeoVista.git
 """
-import math, json, threading, webbrowser, os, tempfile, queue
+import math, json, threading, webbrowser, os, tempfile, queue, pathlib, http.server, socketserver
 from datetime import datetime
 import customtkinter as ctk
 import requests
@@ -94,8 +94,27 @@ def brg_label(b):
     dirs=["K","KKD","KD","DKD","D","DGD","GD","GGD","G","GGB","GB","BGB","B","BKB","KB","KKB"]
     return dirs[round(b/22.5)%16]
 
+_G_PORT = 18030 # Özel GeoVista Portu
+
+def start_server():
+    tmp_dir = os.path.join(os.getcwd(), "gv_maps")
+    if not os.path.exists(tmp_dir): os.makedirs(tmp_dir)
+    handler = http.server.SimpleHTTPRequestHandler
+    handler.log_message = lambda *a: None
+    try:
+        with socketserver.TCPServer(("", _G_PORT), handler) as httpd:
+            print(f"🌍 GeoVista V3 Sunucusu Başlatıldı: http://localhost:{_G_PORT}")
+            httpd.serve_forever()
+    except: pass
+
+# Sunucuyu arka planda başlat
+threading.Thread(target=start_server, daemon=True).start()
+
 def tmp_map():
-    return os.path.join(tempfile.gettempdir(), f"gv_{int(datetime.now().timestamp())}.html")
+    tmp_dir = os.path.join(os.getcwd(), "gv_maps")
+    if not os.path.exists(tmp_dir): os.makedirs(tmp_dir)
+    fname = f"gv_{int(datetime.now().timestamp())}.html"
+    return os.path.join(tmp_dir, fname), fname
 
 class API_M:
     @staticmethod
@@ -232,7 +251,7 @@ class Page(ctk.CTkScrollableFrame):
         folium.Marker([lat,lon],
             popup=folium.Popup(f"<b>{name}</b><br>📍 {lat:.5f}, {lon:.5f}",max_width=220),
             icon=folium.Icon(color="blue",icon="map-marker",prefix="fa")).add_to(m)
-        p=tmp_map(); m.save(p); webbrowser.open(f"file:///{p}")
+        p, fname = tmp_map(); m.save(p); webbrowser.open(f"http://localhost:{_G_PORT}/gv_maps/{fname}")
 
     def export_geojson(self, data, filename_hint="geovista_export"):
         """Exports a list of (lat, lon, label) tuples or a single dict to GeoJSON."""
@@ -452,7 +471,7 @@ class MapPage(Page):
         cc=Card(self,"⚙️ Harita Ayarları"); cc.pack(fill="x",padx=24,pady=(0,14))
         r1=ctk.CTkFrame(cc,fg_color="transparent"); r1.pack(fill="x",padx=14,pady=(0,8))
         ctk.CTkLabel(r1,text="Harita Stili:",text_color=C["t2"],font=ctk.CTkFont("Segoe UI",12)).pack(side="left")
-        self.tile=ctk.CTkComboBox(r1,values=["CartoDB dark_matter","OpenStreetMap","CartoDB positron","NASA Blue Marble","NASA Night Lights","Satellite Hybrid"],
+        self.tile=ctk.CTkComboBox(r1,values=["CartoDB dark_matter","OpenStreetMap","ESRI World Imagery (HD)","NASA Blue Marble","NASA Night Lights","Satellite Hybrid"],
                                    width=240,fg_color=C["card"],border_color=C["border"],text_color=C["t1"],
                                    button_color=C["pbtn"],dropdown_fg_color=C["card"],dropdown_text_color=C["t1"],
                                    font=ctk.CTkFont("Segoe UI",12))
@@ -517,24 +536,33 @@ class MapPage(Page):
 
         wms = None
         if tile == "NASA Blue Marble":
-            tile = "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/BlueMarble_ShadedRelief_Bathymetry/default/250m/{z}/{y}/{x}.jpg"
+            # NASA GIBS REST API - En stabil XYZ formatı
+            tile = "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/BlueMarble_ShadedRelief_Bathymetry/default/default/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpg"
             attr = "NASA GIBS"
         elif tile == "NASA Night Lights":
-            tile = "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_CityLights_2012/default/250m/{z}/{y}/{x}.jpg"
-            attr = "NASA Earth Observatory"
+            tile = "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_CityLights_2012/default/2013-12-01/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpg"
+            attr = "NASA GIBS"
+        elif tile == "ESRI World Imagery (HD)":
+            tile = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+            attr = "Esri Satellite"
         elif tile == "Satellite Hybrid":
             tile = "https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}"
-            attr = "Google"
+            attr = "Google Maps"
         else:
             attr = None
 
         center=[self._markers[0][0],self._markers[0][1]] if self._markers else [39.9334,32.8597]
+        
+        # NASA Zoom Sınırlandırması
+        if "NASA" in tile:
+            if z > 8: z = 8 # NASA GIBS 250m max zoom is 8-9
+            
         m=folium.Map(location=center,zoom_start=z,tiles=tile,attr=attr)
         colors=["blue","red","green","purple","orange","darkblue","pink"]
         for i,(la,lo,lb) in enumerate(self._markers):
             folium.Marker([la,lo],popup=folium.Popup(f"<b>{lb}</b><br>{la:.5f}, {lo:.5f}",max_width=220),
                           tooltip=lb,icon=folium.Icon(color=colors[i%len(colors)],icon="map-marker",prefix="fa")).add_to(m)
-        p=tmp_map(); m.save(p); webbrowser.open(f"file:///{p}")
+        p, fname = tmp_map(); m.save(p); webbrowser.open(f"http://localhost:{_G_PORT}/gv_maps/{fname}")
 
 class CountriesPage(Page):
     def __init__(self,p,**kw):
@@ -738,7 +766,7 @@ class CoordToolsPage(Page):
         folium.Marker([la1,lo1],popup="Nokta A",icon=folium.Icon(color="blue",icon="circle",prefix="fa")).add_to(m)
         folium.Marker([la2,lo2],popup="Nokta B",icon=folium.Icon(color="red",icon="circle",prefix="fa")).add_to(m)
         folium.PolyLine([(la1,lo1),(la2,lo2)],color=C["primary"],weight=3,opacity=0.8).add_to(m)
-        p=tmp_map(); m.save(p); webbrowser.open(f"file:///{p}")
+        p, fname = tmp_map(); m.save(p); webbrowser.open(f"http://localhost:{_G_PORT}/gv_maps/{fname}")
 
     def _dd2dms(self):
         try: dd=float(self.dd_in.get())
@@ -842,7 +870,7 @@ class SpatialLabPage(Page):
         m = folium.Map(location=[self._gdf.geometry.centroid.y.mean(), self._gdf.geometry.centroid.x.mean()],
                        zoom_start=6, tiles="CartoDB dark_matter")
         folium.GeoJson(self._gdf).add_to(m)
-        p = tmp_map(); m.save(p); webbrowser.open(f"file:///{p}")
+        p = tmp_map(); m.save(p); webbrowser.open(os.path.abspath(p))
 
     def _clr(self):
         self._gdf = None
@@ -859,7 +887,7 @@ class WeatherPage(Page):
         super().__init__(p,**kw); self._build()
 
     def _build(self):
-        self.page_hdr("🌡️","Hava & İklim","Open-Meteo API ile 7 günlük hava durumu tahmini")
+        self.page_hdr("🌡️","Hava & İklim","Open-Meteo & NASA GIBS Otomatize Veri Akışı")
         si=ctk.CTkFrame(self,fg_color=C["card2"],corner_radius=10); si.pack(fill="x",padx=24,pady=(0,14))
         ctk.CTkLabel(si,text="Koordinat Gir:",font=ctk.CTkFont("Segoe UI",13,"bold"),text_color=C["t1"]).pack(padx=14,pady=(12,6),anchor="w")
         cr=ctk.CTkFrame(si,fg_color="transparent"); cr.pack(fill="x",padx=14,pady=(0,8))
@@ -1016,12 +1044,24 @@ class SafetyLabPage(Page):
         super().__init__(p,**kw); self._app=app; self._run_sim=False; self._build()
     def _build(self):
         self.page_hdr("🌋","Safet Lab","Afet Simülasyon ve Risk Analiz Motoru")
-        c=Card(self,"🎯 Hedef Koordinatlar (Özel Bölge)"); c.pack(fill="x",padx=24,pady=(0,14))
-        cr=ctk.CTkFrame(c,fg_color="transparent"); cr.pack(fill="x",padx=14,pady=(12,12))
-        ctk.CTkLabel(cr,text="Enlem:",text_color=C["t2"]).pack(side="left")
-        self.sl_lat=self.mk_entry(cr,"36.897",width=90); self.sl_lat.pack(side="left",padx=(8,16))
-        ctk.CTkLabel(cr,text="Boylam:",text_color=C["t2"]).pack(side="left")
-        self.sl_lon=self.mk_entry(cr,"30.647",width=90); self.sl_lon.pack(side="left",padx=8)
+        c=Card(self,"🎯 Simülasyon Senaryosu & Koordinat"); c.pack(fill="x",padx=24,pady=(0,14))
+        cr=ctk.CTkFrame(c,fg_color="transparent"); cr.pack(fill="x",padx=14,pady=(12,0))
+        ctk.CTkLabel(cr,text="Riskli Bölge/Senaryo:",text_color=C["t2"]).pack(side="left")
+        self.risk_zone=ctk.CTkComboBox(cr,values=["- Manuel Seçim -",
+                                                 "Deprem: İstanbul (Marmara Fayı)",
+                                                 "Deprem: Bingöl (Yedisu Segmenti)",
+                                                 "Deprem: Pazarcık (Ölü Deniz Fayı)",
+                                                 "Sel: Kastamonu (Bozkurt Havzası)",
+                                                 "Sel: Rize (Merkez/Dereyatağı)",
+                                                 "Sel: İzmir (Kıyı Taşkın Riski)"],
+                                       width=250,command=self._set_risk_zone)
+        self.risk_zone.pack(side="left",padx=8)
+        
+        cr2=ctk.CTkFrame(c,fg_color="transparent"); cr2.pack(fill="x",padx=14,pady=(8,12))
+        ctk.CTkLabel(cr2,text="Enlem:",text_color=C["t2"]).pack(side="left")
+        self.sl_lat=self.mk_entry(cr2,"36.897",width=90); self.sl_lat.pack(side="left",padx=(8,16))
+        ctk.CTkLabel(cr2,text="Boylam:",text_color=C["t2"]).pack(side="left")
+        self.sl_lon=self.mk_entry(cr2,"30.647",width=90); self.sl_lon.pack(side="left",padx=8)
         
         # 🌊 TAŞKIN
         tc=Card(self,"🌊 Taşkın & Sel Simülasyonu"); tc.pack(fill="x",padx=24,pady=(0,14))
@@ -1036,7 +1076,13 @@ class SafetyLabPage(Page):
         dr=ctk.CTkFrame(dc,fg_color="transparent"); dr.pack(fill="x",padx=14,pady=(0,10))
         ctk.CTkLabel(dr,text="Şiddet (Mw):",text_color=C["t2"]).pack(side="left")
         self.eq_mw=self.mk_entry(dr,"7.0",width=80); self.eq_mw.pack(side="left",padx=8)
-        self.mk_btn(dr,"🔥 Şok Dalgası Simüle Et",self._eq_anim).pack(side="left")
+        ctk.CTkLabel(dr,text="AFAD Zemin (Soil):",text_color=C["t2"]).pack(side="left",padx=(8,0))
+        self.eq_soil=ctk.CTkComboBox(dr,values=["ZA (Sağlam Kaya)","ZB (Az Ayrışmış Kaya)","ZC (Sert Kum/Kil)","ZD (Orta Sıkı Kum/Kil)","ZE (Yumuşak/Alüvyon)"],
+                                     width=180,fg_color=C["card"],border_color=C["border"],text_color=C["t1"],
+                                     button_color=C["pbtn"],dropdown_fg_color=C["card"],dropdown_text_color=C["t1"])
+        self.eq_soil.set("ZB (Az Ayrışmış Kaya)")
+        self.eq_soil.pack(side="left",padx=8)
+        self.mk_btn(dr,"🔥 Şok Dalgası Simüle Et",self._eq_anim).pack(side="left",padx=8)
 
         # 🌿 HEYELAN
         hc=Card(self,"🌿 Heyelan & Eğim Analizi"); hc.pack(fill="x",padx=24,pady=(0,14))
@@ -1053,6 +1099,26 @@ class SafetyLabPage(Page):
         self.sim_status.pack(pady=10)
         self._last_res=None
 
+    def _set_risk_zone(self, choice):
+        zones = {
+            "Deprem: İstanbul (Marmara Fayı)": ("40.850", "28.750", "7.5", "ZE (Yumuşak/Alüvyon)", "1.0"),
+            "Deprem: Bingöl (Yedisu Segmenti)": ("39.420", "40.550", "7.2", "ZB (Az Ayrışmış Kaya)", "1.0"),
+            "Deprem: Pazarcık (Ölü Deniz Fayı)": ("37.450", "37.250", "7.8", "ZE (Yumuşak/Alüvyon)", "1.0"),
+            "Sel: Kastamonu (Bozkurt Havzası)": ("41.954", "33.992", "5.0", "ZD (Orta Sıkı Kum/Kil)", "5.5"),
+            "Sel: Rize (Merkez/Dereyatağı)": ("41.025", "40.517", "4.5", "ZE (Yumuşak/Alüvyon)", "4.0"),
+            "Sel: İzmir (Kıyı Taşkın Riski)": ("38.423", "27.142", "5.0", "ZE (Yumuşak/Alüvyon)", "2.5")
+        }
+        if choice in zones:
+            lat, lon, mw, soil, flood = zones[choice]
+            self.sl_lat.delete(0, "end"); self.sl_lat.insert(0, lat)
+            self.sl_lon.delete(0, "end"); self.sl_lon.insert(0, lon)
+            self.eq_mw.delete(0, "end"); self.eq_mw.insert(0, mw)
+            self.eq_soil.set(soil)
+            self.flood_lvl.delete(0, "end"); self.flood_lvl.insert(0, flood)
+            
+            type_str = "Sismik" if "Deprem" in choice else "Hidrolojik"
+            self.sim_status.configure(text=f"📍 {choice} Yüklendi. {type_str} risk verileri hazır.")
+
     def _flood_anim(self):
         try: lat,lon=float(self.sl_lat.get()),float(self.sl_lon.get())
         except: lat,lon=36.897,30.647
@@ -1067,7 +1133,7 @@ class SafetyLabPage(Page):
             ]
         }
         html = f"""
-<!DOCTYPE html><html><head><meta charset='utf-8'><title>GeoVista Sel v5.4</title>
+<!DOCTYPE html><html><head><meta charset='utf-8'><title>GeoVista Sel v3.0</title>
 <script src='https://unpkg.com/maplibre-gl@4.1.2/dist/maplibre-gl.js'></script>
 <link href='https://unpkg.com/maplibre-gl@4.1.2/dist/maplibre-gl.css' rel='stylesheet' />
 <style>
@@ -1085,12 +1151,12 @@ input[type=range]{{width:100%;margin-top:8px;accent-color:#00E5FF}}
 </style></head><body>
 <canvas id='rc'></canvas><div id='map'></div>
 <div class='hud'>
-  <h1>🌊 SEL &amp; TAŞKIN ANALİZİ</h1><p>Kampüs Alçak Alan Risk Modeli v5.4</p>
+  <h1>🌊 SEL &amp; TAŞKIN ANALİZİ</h1><p>Kampüs Alçak Alan Risk Modeli v3.0</p>
   <div class='row'><span>Su Seviyesi</span><b><span id='v'>0.0</span> m</b></div>
-  <div class='row'><span>Risk</span><b id='rsk' style='color:#4CAF50'>🟢 GÜVENLİ</b></div>
+  <div class='row'><span>Risk</span><b id='rsk' style='color:#27ae60'>🟢 GÜVENLİ</b></div>
   <input id='sld' type='range' min='0' max='30' step='0.1' value='0'>
   <button id='stop'>⏹ DURDUR</button>
-  <div class='leg'>
+    <div class='leg'>
     <b style='color:#00E5FF'>TAŞKIN RİSK ZONLARI:</b><br><br>
     <div class='li'><div class='bx' style='background:#B71C1C'></div><b style='color:#FF5252'>YÜKSEK RİSK</b> – Dere Yatağı (Su Altı!)</div>
     <div class='li'><div class='bx' style='background:#0277BD'></div><b style='color:#29B6F6'>ORTA RİSK</b> – Alçak Zemin (Kısmen!)</div>
@@ -1115,87 +1181,157 @@ let rStop=false;
   requestAnimationFrame(rd);}})();
 
 try{{
-const map=new maplibregl.Map({{container:'map',pitch:62,bearing:-10,zoom:15.6,
-  center:[{lon},{lat}],style:'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json'}});
+const map=new maplibregl.Map({{container:'map',pitch:65,bearing:-10,zoom:15.6,
+  center:[{lon},{lat}],style:'https://tiles.basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json'}});
+map.on('error', (e) => console.error('MapLibre Error:', e));
 let wh=0,stopped=false;
 
 map.on('load',()=>{{
-  const src=Object.keys(map.getStyle().sources).find(s=>s.includes('openmaptiles')||s.includes('carto'));
-  if(src) map.addLayer({{'id':'bld','source':src,'source-layer':'building','type':'fill-extrusion',
+  const src='carto';
+  map.addLayer({{'id':'bld','source':src,'source-layer':'building','type':'fill-extrusion',
     'paint':{{'fill-extrusion-color':'#1a2535','fill-extrusion-height':['coalesce',['get','render_height'],10],'fill-extrusion-opacity':0.88}}}});
 
-  // GÜVENLİ BÖLGE (DEVASA ALAN) - Taşkından etkilenmeyen geniş kuşak
-  const safeZone={{type:'FeatureCollection',features:[
-    {{type:'Feature',geometry:{{type:'Polygon',coordinates:[[
-      [{lon}-0.08,{lat}+0.08],[{lon}+0.08,{lat}+0.08],[{lon}+0.08,{lat}-0.08],[{lon}-0.08,{lat}-0.08],[{lon}-0.08,{lat}+0.08]
-    ]]}}}}
-  ]}};
+  // GÜVENLİ BÖLGE (Yeşil)
+  const safeZone={{type:'Feature',geometry:{{type:'Polygon',coordinates:[[
+       [{lon}-0.08,{lat}+0.08],[{lon}+0.08,{lat}+0.08],[{lon}+0.08,{lat}-0.08],[{lon}-0.08,{lat}-0.08],[{lon}-0.08,{lat}+0.08]
+  ]]}}}};
   map.addSource('safe',{{type:'geojson',data:safeZone}});
-  map.addLayer({{id:'safe2d',type:'fill',source:'safe',paint:{{'fill-color':'#1B5E20','fill-opacity':0.30}}}});
-  map.addLayer({{id:'safeln',type:'line',source:'safe',paint:{{'line-color':'#4CAF50','line-width':2,'line-opacity':0.7}}}});
+  map.addLayer({{id:'safe2d',type:'fill',source:'safe',paint:{{'fill-color':'#1B5E20','fill-opacity':0.3}}}});
 
-  // YÜKSEK RİSK - dere yatağı - tamamen su altı kalır
-  const highZone={{type:'FeatureCollection',features:[
-    {{type:'Feature',geometry:{{type:'Polygon',coordinates:[[
-      [{lon}-0.018,{lat}-0.007],[{lon}-0.004,{lat}-0.007],[{lon}-0.004,{lat}+0.007],[{lon}-0.018,{lat}+0.007],[{lon}-0.018,{lat}-0.007]
-    ]]}}}}
-  ]}};
+  // YÜKSEK RİSK (Hafif Engebeli Su Kenarı - Kırmızı)
+  const highZone={{type:'Feature',geometry:{{type:'Polygon',coordinates:[[
+    [{lon}-0.018,{lat}-0.007],[{lon}-0.011,{lat}-0.008],[{lon}-0.004,{lat}-0.007],
+    [{lon}-0.003,{lat}-0.002],[{lon}-0.004,{lat}+0.007],[{lon}-0.011,{lat}+0.008],
+    [{lon}-0.018,{lat}+0.007],[{lon}-0.019,{lat}+0.001],[{lon}-0.018,{lat}-0.007]
+  ]]}}}};
   map.addSource('high',{{type:'geojson',data:highZone}});
-  map.addLayer({{id:'high2d',type:'fill',source:'high',paint:{{'fill-color':'#B71C1C','fill-opacity':0.35}}}});
   map.addLayer({{id:'high3d',type:'fill-extrusion',source:'high',paint:{{
-    'fill-extrusion-height':0.1,'fill-extrusion-opacity':0.82,'fill-extrusion-color':'#E53935'
+    'fill-extrusion-height':0.1,'fill-extrusion-opacity':0.75,'fill-extrusion-color':'#B71C1C'
   }}}});
 
-  // ORTA RİSK - alçak zemin - kısmen su altı kalır (high'ın %60'ı kadar)
-  const midZone={{type:'FeatureCollection',features:[
-    {{type:'Feature',geometry:{{type:'Polygon',coordinates:[[
-      [{lon}+0.006,{lat}-0.013],[{lon}+0.022,{lat}-0.013],[{lon}+0.022,{lat}+0.005],[{lon}+0.006,{lat}+0.005],[{lon}+0.006,{lat}-0.013]
-    ]]}}}}
-  ]}};
+  // ORTA RİSK (Hafif Engebeli Su Kenarı - Mavi)
+  const midZone={{type:'Feature',geometry:{{type:'Polygon',coordinates:[[
+    [{lon}+0.006,{lat}-0.013],[{lon}+0.014,{lat}-0.014],[{lon}+0.022,{lat}-0.013],
+    [{lon}+0.023,{lat}-0.004],[{lon}+0.022,{lat}+0.005],[{lon}+0.014,{lat}+0.006],
+    [{lon}+0.006,{lat}+0.005],[{lon}+0.005,{lat}-0.004],[{lon}+0.006,{lat}-0.013]
+  ]]}}}};
   map.addSource('mid',{{type:'geojson',data:midZone}});
-  map.addLayer({{id:'mid2d',type:'fill',source:'mid',paint:{{'fill-color':'#0277BD','fill-opacity':0.35}}}});
   map.addLayer({{id:'mid3d',type:'fill-extrusion',source:'mid',paint:{{
-    'fill-extrusion-height':0.1,'fill-extrusion-opacity':0.70,'fill-extrusion-color':'#29B6F6'
+    'fill-extrusion-height':0.1,'fill-extrusion-opacity':0.75,'fill-extrusion-color':'#0277BD'
   }}}});
 
-  setInterval(()=>{{
+  // AJANLAR (Sadece Riskli Bölgelerde Doğarlar)
+  const agents={{type:'FeatureCollection',features:[]}};
+  for(let i=0;i<30;i++){{
+    let startLon, startLat;
+    if(i < 15) {{ // Kırmızı Bölge İçi (Yaklaşık)
+        startLon = {lon} - 0.011 + (Math.random()-0.5)*0.006;
+        startLat = {lat} + (Math.random()-0.5)*0.006;
+    }} else {{ // Mavi Bölge İçi (Yaklaşık)
+        startLon = {lon} + 0.014 + (Math.random()-0.5)*0.008;
+        startLat = {lat} - 0.004 + (Math.random()-0.5)*0.008;
+    }}
+    agents.features.push({{
+      type:'Feature',
+      geometry:{{type:'Point',coordinates:[startLon, startLat]}},
+      properties:{{id:i, state:'normal', speed:0.012 + Math.random()*0.008, safe:false}}
+    }});
+  }}
+  map.addSource('agents',{{type:'geojson',data:agents}});
+  
+  // İnsan Silueti İkonu (Canvas)
+  const canvas = document.createElement('canvas');
+  canvas.width = 32; canvas.height = 32;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#FFF'; ctx.beginPath(); ctx.arc(16, 6, 5, 0, Math.PI*2); ctx.fill();
+  ctx.strokeStyle = '#FFF'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(16, 11); ctx.lineTo(16, 23); 
+  ctx.moveTo(16, 14); ctx.lineTo(8, 20); ctx.moveTo(16, 14); ctx.lineTo(24, 20);
+  ctx.moveTo(16, 23); ctx.lineTo(10, 31); ctx.moveTo(16, 23); ctx.lineTo(22, 31); ctx.stroke();
+  const imgData = ctx.getImageData(0,0,32,32);
+  if(!map.hasImage('human-flood')) map.addImage('human-flood', imgData);
+
+  map.addLayer({{ 
+        id:'agent-layer',type:'symbol',source:'agents',
+        layout:{{ 
+          'icon-image':'human-flood', 'icon-size':0.6, 'icon-allow-overlap':true,
+          'text-field':['case',['get','safe'],'✅',''], 'text-offset':[0,-1.5], 'text-size':12
+        }},
+        paint:{{ 
+            'icon-color':['match',['get','state'],'normal','#FFF','risk','#FFEB3B','safe','#4CAF50','#F44336']
+        }}
+  }});
+
+  // AFET TOPLANMA ALANI GÖRSELLEŞTİRME
+  const floodTarget = [{lon} + 0.0015, {lat} - 0.002];
+  map.addSource('safe_point', {{ type: 'geojson', data: {{ type: 'Feature', geometry: {{ type: 'Point', coordinates: floodTarget }} }} }});
+  map.addLayer({{ id: 'safe_circle', type: 'circle', source: 'safe_point', paint: {{ 'circle-radius': 12, 'circle-color': '#00E5FF', 'circle-stroke-width': 3, 'circle-stroke-color': '#FFF' }} }});
+  map.addLayer({{ 
+    id: 'safe_label', type: 'symbol', source: 'safe_point', 
+    layout: {{ 'text-field': 'AFET TOPLANMA ALANI', 'text-size': 14, 'text-offset': [0, 2], 'text-anchor': 'top' }},
+    paint: {{ 'text-color': '#00E5FF', 'text-halo-color': '#000', 'text-halo-width': 2 }}
+  }});
+
+  // HUD Güncelleme (Tahliye Sayacı)
+  const hud = document.createElement('div');
+  hud.id = 'evac-hud';
+  hud.style = 'position:absolute;bottom:20px;right:20px;background:rgba(0,20,40,0.9);padding:15px;border-radius:12px;color:white;font-family:sans-serif;border:1px solid #00f2ff;box-shadow:0 0 15px rgba(0,242,255,0.3);z-index:999;';
+  hud.innerHTML = `<h4 style="margin:0 0 10px 0;color:#00f2ff;border-bottom:1px solid #333;padding-bottom:5px;">TAHLİYE DURUMU</h4>
+    <div style="font-size:14px;">Tahliye Edilen: <span id="safe-count" style="color:#4CAF50;font-weight:bold;">0</span></div>
+    <div style="font-size:14px;">Risk Altında: <span id="risk-count" style="color:#FFEB3B;font-weight:bold;">0</span></div>
+    <div style="font-size:14px;">Normal: <span id="norm-count" style="color:#FFF;">30</span></div>`;
+  document.body.appendChild(hud);
+
+  const loop=setInterval(()=>{{
     if(stopped) return;
     if(wh < {max_h}){{
-      wh += 0.07;
-      // HIGH ZONE: tam yükseklikte dolar
+      wh += 0.08;
       map.setPaintProperty('high3d','fill-extrusion-height', wh);
-      // MID ZONE: HIGH'ın %55'i kadar dolar (daha az etkilenir)
-      const midH = wh * 0.55;
-      map.setPaintProperty('mid3d','fill-extrusion-height', midH > 0.1 ? midH : 0.1);
-      // Renkler şiddete göre derinleşir
-      if(wh > 18) {{
-        map.setPaintProperty('high3d','fill-extrusion-color','#FF1744');
-        map.setPaintProperty('mid3d','fill-extrusion-color','#E53935');
-      }} else if(wh > 9) {{
-        map.setPaintProperty('high3d','fill-extrusion-color','#D32F2F');
-        map.setPaintProperty('mid3d','fill-extrusion-color','#1976D2');
-      }}
+      map.setPaintProperty('mid3d','fill-extrusion-height', wh * 0.55);
+      
       document.getElementById('v').innerText = wh.toFixed(1);
       document.getElementById('sld').value = wh;
       const r = document.getElementById('rsk');
-      if(wh>18){{r.innerText='🔴 KRİTİK TAŞKIN';r.style.color='#FF1744';}}
-      else if(wh>9){{r.innerText='🟡 ORTA RİSK';r.style.color='#FFD600';}}
-      else{{r.innerText='🟢 GÜVENLİ';r.style.color='#4CAF50';}}
+      if(wh>20){{r.innerText='🔴 YÜKSEK RİSK'; r.style.color='#FF5252';}}
+      else if(wh>8){{r.innerText='🔵 ORTA RİSK'; r.style.color='#29B6F6';}}
+      else{{r.innerText='🟢 GÜVENLİ'; r.style.color='#66BB6A';}}
+
+      // Ajan Tahliye Mantığı (ANINDA VE HIZLI)
+      let s=0, rs=0, n=0;
+      agents.features.forEach(f => {{
+          const [alon, alat] = f.geometry.coordinates;
+          const target = [{lon} + 0.0015, {lat} - 0.002]; 
+          
+          const dist = Math.sqrt(Math.pow(alon-target[0],2) + Math.pow(alat-target[1],2));
+          if (dist > 0.0008) {{
+              f.geometry.coordinates[0] += (target[0]-alon) * f.properties.speed;
+              f.geometry.coordinates[1] += (target[1]-alat) * f.properties.speed;
+              f.properties.state = 'risk';
+              rs++;
+          }} else {{
+              f.properties.state = 'safe';
+              s++;
+          }}
+      }});
+      document.getElementById('safe-count').innerText = s;
+      document.getElementById('risk-count').innerText = rs;
+      document.getElementById('norm-count').innerText = n;
+      map.getSource('agents').setData(agents);
     }}
-  }}, 45);
+  }}, 50);
 
   document.getElementById('sld').oninput=(e)=>{{
     wh=parseFloat(e.target.value); stopped=true;
     map.setPaintProperty('high3d','fill-extrusion-height',wh);
-    map.setPaintProperty('mid3d','fill-extrusion-height',Math.max(0.1,wh*0.55));
+    map.setPaintProperty('mid3d','fill-extrusion-height',wh*0.6);
     document.getElementById('v').innerText=wh.toFixed(1);
   }};
-  document.getElementById('stop').onclick=()=>{{stopped=true;rStop=true;}};
-  map.on('idle',()=>{{map.setBearing(map.getBearing()+0.1);}});
+  document.getElementById('stop').onclick=()=>{{stopped=true;rStop=true;clearInterval(loop);}};
+  map.on('idle',()=>{{if(!stopped) map.setBearing(map.getBearing()+0.04);}});
 }});
 }}catch(e){{alert('Hata: '+e.message);}}
 </script></body></html>"""
-        p=tmp_map(); f=open(p,"w",encoding="utf-8"); f.write(html); f.close(); webbrowser.open(f"file:///{p}")
+        p, fname = tmp_map(); f=open(p,"w",encoding="utf-8"); f.write(html); f.close(); webbrowser.open(f"http://localhost:{_G_PORT}/gv_maps/{fname}")
         self.sim_status.configure(text="✅ Taşkın Simülasyonu Aktif!")
 
     def _eq_anim(self):
@@ -1218,7 +1354,15 @@ map.on('load',()=>{{
         try: m_val = float(mw)
         except: m_val = 7.5
         
-        scale = math.pow(m_val / 5.0, 3)
+        soil = self.eq_soil.get()
+        # AFAD Zemin Sınıfı Katsayıları (PGA Scalars)
+        soil_f = 0.8  # ZA: Kaya
+        if "ZB" in soil: soil_f = 1.0 # Referans
+        elif "ZC" in soil: soil_f = 1.3 # Sert Kum
+        elif "ZD" in soil: soil_f = 1.6 # Orta Sıkı
+        elif "ZE" in soil: soil_f = 2.2 # Kritik (Alüvyon)
+        
+        scale = math.pow(m_val / 5.0, 3) * soil_f
         r1 = 0.002 + scale * 0.004
         r2, r3 = r1 * 2.2, r1 * 4.0
 
@@ -1233,34 +1377,42 @@ map.on('load',()=>{{
         }
 
         html = f"""
-<!DOCTYPE html><html><head><meta charset='utf-8'><title>GeoVista Deprem v5.3</title>
+<!DOCTYPE html><html><head><meta charset='utf-8'><title>GeoVista Deprem v3.0</title>
 <script src='https://unpkg.com/maplibre-gl@4.1.2/dist/maplibre-gl.js'></script>
 <link href='https://unpkg.com/maplibre-gl@4.1.2/dist/maplibre-gl.css' rel='stylesheet' />
 <style>
 body{{margin:0;overflow:hidden;background:#000}}
 #map{{position:absolute;top:0;bottom:0;width:100%;transform-origin:center}}
-.hud{{position:absolute;top:20px;left:20px;background:rgba(20,2,2,0.97);padding:22px;border-radius:14px;color:#FF1744;font-family:'Segoe UI',sans-serif;border:2px solid #FF1744;z-index:100;width:300px;box-shadow:0 0 40px rgba(255,23,68,0.5)}}
-.hud h1{{margin:0 0 3px;font-size:20px}}.hud p{{margin:0 0 10px;opacity:0.5;font-size:11px}}
-.leg{{font-size:11px;margin-top:12px;border-top:1px solid #3a1010;padding-top:10px}}
+.hud{{position:absolute;top:20px;left:20px;background:rgba(10,10,10,0.85);backdrop-filter:blur(10px);padding:24px;border-radius:16px;color:#FFF;font-family:'Segoe UI',sans-serif;border:1px solid rgba(255,23,68,0.4);z-index:100;width:280px;box-shadow:0 8px 32px rgba(0,0,0,0.6)}}
+.hud h1{{margin:0 0 5px;font-size:22px;color:#FF1744;text-transform:uppercase;letter-spacing:1.5px}}
+.leg{{font-size:11px;margin-top:15px;border-top:1px solid rgba(255,255,255,0.1);padding-top:12px}}
+button{{background:linear-gradient(135deg,#FF1744,#D50000);border:none;padding:12px;border-radius:8px;cursor:pointer;font-weight:bold;width:100%;margin-top:15px;color:#FFF;font-size:13px;text-transform:uppercase;transition:0.3s}}
+button:hover{{transform:translateY(-2px);box-shadow:0 5px 15px rgba(255,23,68,0.4)}}
 .li{{display:flex;align-items:center;margin-bottom:6px}}
 .bx{{width:14px;height:14px;margin-right:8px;border-radius:3px;flex-shrink:0}}
-button{{background:linear-gradient(135deg,#FF1744,#7f0000);border:none;padding:11px;border-radius:8px;cursor:pointer;font-weight:bold;width:100%;margin-top:10px;color:#FFF;font-size:13px}}
 input[type=range]{{width:100%;margin-top:8px;accent-color:#FF1744}}
 .row{{display:flex;justify-content:space-between;margin:5px 0;font-size:13px}}
-@keyframes q1{{0%,100%{{transform:translate(0,0)}}25%{{transform:translate(-3px,2px)}}75%{{transform:translate(3px,-2px)}}}}
-@keyframes q2{{0%,100%{{transform:translate(0,0)rotate(0)}}10%{{transform:translate(-6px,5px)rotate(-0.5deg)}}30%{{transform:translate(8px,-6px)rotate(0.5deg)}}50%{{transform:translate(-7px,7px)rotate(-0.4deg)}}70%{{transform:translate(6px,-5px)rotate(0.4deg)}}90%{{transform:translate(-5px,6px)rotate(-0.2deg)}}}}
-@keyframes q3{{0%,100%{{transform:translate(0,0)rotate(0)}}5%{{transform:translate(-16px,12px)rotate(-1.2deg)}}15%{{transform:translate(18px,-14px)rotate(1.2deg)}}25%{{transform:translate(-14px,16px)rotate(-1deg)}}35%{{transform:translate(16px,-12px)rotate(1deg)}}45%{{transform:translate(-18px,10px)rotate(-0.8deg)}}55%{{transform:translate(14px,-16px)rotate(0.8deg)}}65%{{transform:translate(-12px,14px)rotate(-0.5deg)}}75%{{transform:translate(16px,-10px)rotate(0.5deg)}}85%{{transform:translate(-10px,12px)rotate(-0.3deg)}}95%{{transform:translate(12px,-8px)rotate(0.3deg)}}}}
-.q1{{animation:q1 0.2s linear infinite}}
-.q2{{animation:q2 0.13s linear infinite}}
-.q3{{animation:q3 0.07s linear infinite}}
+.q1{{opacity:1}}
+.q2{{opacity:1}}
+.q3{{opacity:1}}
 </style></head><body>
 <div id='map'></div>
 <div class='hud'>
-  <h1>⚡ DEPREM ANALİZİ</h1><p>3D Güvenlik Zonu Modeli v5.3</p>
-  <div class='row'><span>Büyüklük</span><b><span id='mv'>{mw}</span> Mw</b></div>
-  <div class='row'><span>Durum</span><b id='st' style='color:#FF1744'>🔴 AKTİF (<span id='tmr'>15</span>s)</b></div>
-  <input id='sld' type='range' min='4.0' max='9.5' step='0.1' value='{mw}'>
-  <button id='stp'>🛑 DEPREMI DURDUR</button>
+  <div class='row' style='margin-bottom:15px;border-bottom:1px solid rgba(255,23,68,0.3);padding-bottom:10px'>
+    <span style='font-size:12px;letter-spacing:1px'>SİSTEM DURUMU</span>
+    <b id='st' style='color:#FF1744;text-shadow:0 0 10px #FF1744'>🔴 KRİTİK</b>
+  </div>
+  <div class='row'><span>🏃‍♂️ Toplam Nüfus</span><b style='color:#FFF'>30</b></div>
+  <div class='row'><span>✅ Güvenli Tahliye</span><b id='evc' style='color:#00E676'>0</b></div>
+  <div class='row'><span>⚠️ Panik Alanı</span><b id='pnc' style='color:#FFD600'>0</b></div>
+  <div class='row'><span>⏳ Kalan Süre</span><b id='tmr' style='color:#FFF'>15s</b></div>
+  
+  <div style='margin-top:20px'>
+    <span style='font-size:11px;opacity:0.7'>SARSINTI ŞİDDETİ (Mw)</span>
+    <input id='sld' type='range' min='4.0' max='9.5' step='0.1' value='{mw}'>
+    <div style='text-align:center;font-weight:bold;font-size:18px;color:#FF1744' id='mv'>{mw}</div>
+  </div>
+  <button id='stp'>🛑 PROTOKOLÜ DURDUR</button>
   <div class='leg'>
     <b style='color:#FFD600'>GÜVENLİK ZONU HARİTASI:</b><br><br>
     <div class='li'><div class='bx' style='background:#2E7D32'></div><b style='color:#4CAF50'>GÜVENLİ</b> – Toplanma Alanı (Dış Bölge)</div>
@@ -1272,10 +1424,10 @@ input[type=range]{{width:100%;margin-top:8px;accent-color:#FF1744}}
 <script>
 try{{
 const map=new maplibregl.Map({{container:'map',pitch:65,bearing:12,zoom:15.5,
-  center:[{lon},{lat}],style:'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json'}});
-let mag={mw},active=true,rd=0;
+  center:[{lon},{lat}],style:'https://tiles.basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json'}});
+map.on('error', (e) => console.error('MapLibre Error:', e));
+let mag={mw}, sf={soil_f}, active=true, rd=0, agents=[], targetPos;
 
-// Dinamik Zon Hesaplama Fonksiyonları
 function getCircle(clon, clat, r_deg) {{
   const pts = [];
   const rad = Math.PI / 180;
@@ -1289,11 +1441,11 @@ function getCircle(clon, clat, r_deg) {{
 }}
 
 function getZonesData(m) {{
-  // Şiddete göre üstel (kübik) büyüme çarpanı
-  const scale = Math.pow(m / 5.0, 3);
-  const r1 = 0.002 + scale * 0.004; // Kırmızı zon
-  const r2 = r1 * 2.2;              // Turuncu zon
-  const r3 = r1 * 4.0;              // Yeşil zon
+  const scale = Math.pow(m / 5.0, 3) * sf;
+  const r1 = 0.002 + scale * 0.004; 
+  const r2 = r1 * 2.2;
+  const r3 = r1 * 4.0;
+  targetPos = [{lon} + r1 * 2.4, {lat} + r1 * 2.2]; // Hedef: Yeşil Bölgenin İyice İçinde
   return {{
     type:'FeatureCollection', features:[
       {{type:'Feature',properties:{{z:'safe'}},geometry:{{type:'Polygon',coordinates:getCircle({lon},{lat},r3)}}}},
@@ -1303,6 +1455,41 @@ function getZonesData(m) {{
   }};
 }}
 const zones = getZonesData(mag);
+function initAgents() {{
+  agents = [];
+  const scale = Math.pow(mag / 5.0, 3) * sf;
+  const distRadius = 0.002 + scale * 0.004; // Kırmızı zon yarıçapı (r1)
+  
+  // Tüm binaları al
+  const allBuildings = map.queryRenderedFeatures({{ layers: ['bld'] }});
+  
+  // Sadece kırmızı bölge içindeki binaları filtrele
+  const redZoneBuildings = allBuildings.filter(b => {{
+    let bLon, bLat;
+    if(b.geometry.type === 'Point') {{
+      bLon = b.geometry.coordinates[0]; bLat = b.geometry.coordinates[1];
+    }} else {{
+      const coords = b.geometry.type === 'Polygon' ? b.geometry.coordinates[0][0] : b.geometry.coordinates[0][0][0];
+      bLon = coords[0]; bLat = coords[1];
+    }}
+    const dist = Math.sqrt(Math.pow(bLon - {lon}, 2) + Math.pow(bLat - {lat}, 2));
+    return dist <= distRadius;
+  }});
+
+  for(let i=0; i<30; i++) {{
+    const r = Math.random() * distRadius * 0.8; // Kırmızı bölgenin iyice içinde başlasınlar
+    const a = Math.random() * 2 * Math.PI;
+    const startLon = {lon} + r * Math.cos(a);
+    const startLat = {lat} + r * Math.sin(a);
+
+    agents.push({{
+      id: i,
+      lon: startLon, lat: startLat,
+      safe: false, angle: Math.random() * 2 * Math.PI,
+      speed: 0.00012 + Math.random() * 0.0001, bob: 0
+    }});
+  }}
+}}
 
 map.on('load',()=>{{
   const src=Object.keys(map.getStyle().sources).find(s=>s.includes('openmaptiles')||s.includes('carto'));
@@ -1318,61 +1505,74 @@ map.on('load',()=>{{
     'line-width':2,'line-opacity':0.9
   }}}});
 
-  // 2) 3D BİNALAR - renkler zon'a göre
+  map.addLayer({{id:'zfill',type:'fill',source:'zones',paint:{{'fill-color':['match',['get','z'],'safe','#1B5E20','mod','#E65100','high','#B71C1C','#333'],'fill-opacity':0.35}}}});
+  map.addLayer({{id:'zline',type:'line',source:'zones',paint:{{'line-color':['match',['get','z'],'safe','#4CAF50','mod','#FF9800','high','#FF1744','#fff'],'line-width':2,'line-opacity':0.9}}}});
+
   if(src) map.addLayer({{
     'id':'bld','source':src,'source-layer':'building','type':'fill-extrusion',
-    'paint':{{
-      'fill-extrusion-color':'#2E4A1E',
-      'fill-extrusion-height':['coalesce',['get','render_height'],12],
-      'fill-extrusion-base':0,
-      'fill-extrusion-opacity':0.92
-    }}
+    'paint':{{'fill-extrusion-color':'#2E4A1E','fill-extrusion-height':['coalesce',['get','render_height'],12],'fill-extrusion-base':0,'fill-extrusion-opacity':0.92}}
   }});
 
-  // 3) EPİSANTR NOKTASI
   map.addSource('epi',{{type:'geojson',data:{{type:'Feature',geometry:{{type:'Point',coordinates:[{lon},{lat}]}}}}}});
   map.addLayer({{id:'ering',type:'circle',source:'epi',paint:{{'circle-radius':0,'circle-color':'rgba(255,23,68,0.1)','circle-stroke-width':2,'circle-stroke-color':'#FF1744'}}}});
   map.addLayer({{id:'edot',type:'circle',source:'epi',paint:{{'circle-radius':10,'circle-color':'#FF1744','circle-stroke-width':3,'circle-stroke-color':'#FFF'}}}});
 
-  // 4) SARSINTI + BİNA YIKILMA ANİMASYONU
-  let ht_offset=0, frame=0;
+  map.addSource('agt', {{ type: 'geojson', data: {{ type: 'FeatureCollection', features: [] }} }});
+  initAgents(); 
+  
+  // AFET TOPLANMA ALANI GÖRSELLEŞTİRME (Yeşil Bölge İçine)
+  map.addSource('safe_point', {{ type: 'geojson', data: {{ type: 'Feature', geometry: {{ type: 'Point', coordinates: targetPos }} }} }});
+  map.addLayer({{ id: 'safe_circle', type: 'circle', source: 'safe_point', paint: {{ 'circle-radius': 15, 'circle-color': '#4CAF50', 'circle-stroke-width': 4, 'circle-stroke-color': '#FFF', 'circle-opacity': 0.8 }} }});
+  map.addLayer({{ 
+    id: 'safe_label', type: 'symbol', source: 'safe_point', 
+    layout: {{ 'text-field': 'AFET TOPLANMA ALANI', 'text-size': 16, 'text-offset': [0, -2.5], 'text-anchor': 'bottom', 'text-allow-overlap': true }},
+    paint: {{ 'text-color': '#4CAF50', 'text-halo-color': '#000', 'text-halo-width': 3 }}
+  }});
+
+  const canvas = document.createElement('canvas');
+  canvas.width = 32; canvas.height = 32;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#FFF'; ctx.beginPath(); ctx.arc(16, 6, 5, 0, Math.PI*2); ctx.fill(); 
+  ctx.strokeStyle = '#FFF'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(16, 11); ctx.lineTo(16, 23); 
+  ctx.moveTo(16, 14); ctx.lineTo(8, 20); ctx.moveTo(16, 14); ctx.lineTo(24, 20);
+  ctx.moveTo(16, 23); ctx.lineTo(10, 31); ctx.moveTo(16, 23); ctx.lineTo(22, 31); ctx.stroke();
+  const imgData = ctx.getImageData(0,0,32,32);
+  if(!map.hasImage('human-run')) map.addImage('human-run', imgData);
+  map.addLayer({{
+    id: 'agt-layer', type: 'symbol', source: 'agt',
+    layout: {{ 'icon-image': 'human-run', 'icon-size': 0.7, 'icon-allow-overlap': true, 'text-field': ['case', ['get', 'safe'], '✅', ''], 'text-offset': [0, -1.8], 'text-size': 14 }}
+  }});
+
+  let frame=0;
   const loop=setInterval(()=>{{
     if(!active) return;
     frame++;
-
-    // Şok dalgası büyüsün
     rd=(rd+4)%120;
     map.setPaintProperty('ering','circle-radius',rd*mag*0.16);
-
-    // Ekran sarsıntısı
     const el=document.getElementById('map');
-    if(mag>=7.5) el.className='q3';
-    else if(mag>=5.5) el.className='q2';
-    else el.className='q1';
+    el.className = mag>=7.5 ? 'q3' : (mag>=5.5 ? 'q2' : 'q1');
 
-    // 3D BİNA ANİMASYONU - zon'a göre farklı yıkılma
     if(map.getLayer('bld')){{
-      const jitter = mag * 2.2;
-      const hRand = (Math.random()-0.5) * jitter;
+      const jitter = mag * 2.2 * sf, hRand = (Math.random()-0.5) * jitter;
+      let saved = 0, panic = 0;
+      const sLon = targetPos[0], sLat = targetPos[1]; 
+      const features = agents.map(a => {{
+        if(!a.safe) {{
+          a.angle = Math.atan2(sLat - a.lat, sLon - a.lon);
+          a.lon += Math.cos(a.angle) * a.speed * 1.0;
+          a.lat += Math.sin(a.angle) * a.speed * 1.0;
+          const dSafe = Math.sqrt(Math.pow(sLon-a.lon,2) + Math.pow(sLat-a.lat,2));
+          if(dSafe < 0.0006) a.safe = true;
+          panic++;
+        }} else saved++;
+        return {{ type: 'Feature', geometry: {{ type: 'Point', coordinates: [a.lon, a.lat] }}, properties: {{ safe: a.safe }} }};
+      }});
+      map.getSource('agt').setData({{ type: 'FeatureCollection', features: features }});
+      document.getElementById('evc').innerText = saved;
+      document.getElementById('pnc').innerText = panic;
 
-      // Base yüksekliği sallanma (temel çöküşü)
-      const baseJitter = Math.random() * (mag>7 ? 4.5 : mag>5 ? 2 : 0.8);
-
-      // Bina yüksekliği: yüksek depremde binalar adeta yere yapışıyor (Pancaking / Çökme)
-      let hFactor = 1.0;
-      if(mag >= 8.0) {{
-        // Vahşi şiddette binaların büyük kısmı eziliyor (%5 - %15 yüksekliğe iniyor)
-        hFactor = (frame % 4 < 2) ? 0.05 + Math.random()*0.1 : 0.8;
-      }} else if(mag >= 7.0) {{
-        // Şiddetli yıkım: Binaların yüksekliği çok ağır darbe alıyor
-        hFactor = (frame % 6 < 3) ? 0.2 + Math.random()*0.2 : 1.0;
-      }} else if(mag >= 5.5) {{
-        // Orta hasar: Hafif basıklıklar
-        hFactor = (frame % 10 < 4) ? 0.6 + Math.random()*0.2 : 1.0;
-      }}
-
-      map.setPaintProperty('bld','fill-extrusion-height',
-        ['+', ['*', ['coalesce',['get','render_height'],12], hFactor], hRand]);
+      const baseJitter = Math.random() * (mag>7 ? 12.0 : mag>5 ? 6.0 : 2.5) * sf;
       map.setPaintProperty('bld','fill-extrusion-base', baseJitter);
 
       // Bina rengi: zone bazlı (kırmızı zone = kırmızı), dinamik
@@ -1392,18 +1592,24 @@ map.on('load',()=>{{
       }}
       map.setPaintProperty('bld','fill-extrusion-color', col);
 
-      // !! YIKILMA: Binalar aşırı şiddette yatay kayıyor/sürükleniyor (Translate) !!
-      if(mag >= 7.0) {{
-        // Çok büyük kayma: Devasa sarsıntı
-        const tiltX = (Math.random()-0.5) * mag * 4.0;
-        const tiltY = (Math.random()-0.5) * mag * 4.0;
+      // !! YIKILMA: Binalar sarsıntıya göre tepki verir (3.0+ başlar) !!
+      if(mag >= 6.5) {{
+        // Devasa sarsıntı
+        const tiltX = (Math.random()-0.5) * mag * 15.0 * sf;
+        const tiltY = (Math.random()-0.5) * mag * 15.0 * sf;
         map.setPaintProperty('bld','fill-extrusion-translate', [tiltX, tiltY]);
-      }} else if(mag >= 5.5) {{
-        const tiltX = (Math.random()-0.5) * mag * 1.5;
-        const tiltY = (Math.random()-0.5) * mag * 1.5;
+        // Kamera titremesi
+        map.getContainer().style.transform = 'translate(' + ((Math.random()-0.5)*8) + 'px, ' + ((Math.random()-0.5)*8) + 'px)';
+      }} else if(mag >= 3.0) {{
+        // Orta/Hafif sarsıntı (3.0'dan itibaren başlar)
+        const intensity = (mag - 3.0) * 2.0;
+        const tiltX = (Math.random()-0.5) * intensity * 5.0 * sf;
+        const tiltY = (Math.random()-0.5) * intensity * 5.0 * sf;
         map.setPaintProperty('bld','fill-extrusion-translate', [tiltX, tiltY]);
+        map.getContainer().style.transform = 'translate(' + ((Math.random()-0.5)*intensity) + 'px, ' + ((Math.random()-0.5)*intensity) + 'px)';
       }} else {{
         map.setPaintProperty('bld','fill-extrusion-translate', [0, 0]);
+        map.getContainer().style.transform = 'translate(0,0)';
       }}
     }}
   }}, 35);
@@ -1446,14 +1652,14 @@ map.on('load',()=>{{
 }});
 }}catch(e){{alert('Hata: '+e.message);}}
 </script></body></html>"""
-        p=tmp_map(); f=open(p,"w",encoding="utf-8"); f.write(html); f.close(); webbrowser.open(f"file:///{p}")
+        p, fname = tmp_map(); f=open(p,"w",encoding="utf-8"); f.write(html); f.close(); webbrowser.open(f"http://localhost:{_G_PORT}/gv_maps/{fname}")
         self.sim_status.configure(text="✅ Deprem & Güvenlik Zonları Aktif!")
 
     def _slope_analiz(self):
         lat,lon=36.897,30.647
         self.sim_status.configure(text="🏔️ 3D İrtifa Analizi...")
         html = f"""
-<!DOCTYPE html><html><head><meta charset='utf-8'><title>GeoVista Topo</title>
+<!DOCTYPE html><html><head><meta charset='utf-8'><title>GeoVista Topo v3.0</title>
 <script src='https://unpkg.com/maplibre-gl@4.1.2/dist/maplibre-gl.js'></script>
 <link href='https://unpkg.com/maplibre-gl@4.1.2/dist/maplibre-gl.css' rel='stylesheet' />
 <style>body{{margin:0;overflow:hidden}}#map{{position:absolute;top:0;bottom:0;width:100%}}
@@ -1461,7 +1667,7 @@ map.on('load',()=>{{
 .leg div{{margin:8px 0;font-size:13px;display:flex;align-items:center}}
 .leg span{{width:14px;height:14px;margin-right:8px;border-radius:2px}}
 </style></head><body><div id='map'></div>
-<div class='hud'><h1>🏔️ 3D TOPO</h1><p>v4.6 Stabil</p>
+<div class='hud'><h1>🏔️ 3D TOPO</h1><p>v3.0 Stabil</p>
     <div><span style='background:#FFF'></span>Kar Hattı</div>
     <div><span style='background:#795548'></span>Heyelan Riski</div>
     <div><span style='background:#66BB6A'></span>Ova Hattı</div>
@@ -1469,7 +1675,8 @@ map.on('load',()=>{{
 </div>
 <script>
 try {{
-const map = new maplibregl.Map({{ container: 'map', pitch: 80, bearing: 45, zoom: 12.5, center: [{lon}, {lat}], style: 'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json' }});
+const map = new maplibregl.Map({{ container: 'map', pitch: 80, bearing: 45, zoom: 12.5, center: [{lon}, {lat}], style: 'https://tiles.basemaps.cartocdn.com/gl/voyager-gl-style/style.json' }});
+map.on('error', (e) => console.error('MapLibre Error:', e));
 map.on('load', () => {{
     map.addSource('tr', {{ type: 'raster-dem', tiles: ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{{z}}/{{x}}/{{y}}.png'], encoding: 'terrarium', tileSize: 256 }});
     map.setTerrain({{ source: 'tr', exaggeration: 30.0 }});
@@ -1478,9 +1685,9 @@ map.on('load', () => {{
 }});
 }} catch(e) {{ alert('Hata: ' + e.message); }}
 </script></body></html>"""
-        p=tmp_map()
+        p, fname = tmp_map()
         with open(p,"w",encoding="utf-8") as f: f.write(html)
-        webbrowser.open(f"file:///{p}")
+        webbrowser.open(f"http://localhost:{_G_PORT}/gv_maps/{fname}")
         self.sim_status.configure(text="✅ İrtifa Analizi Yayında!")
 
     def _heyelan_analiz(self):
@@ -1496,7 +1703,7 @@ map.on('load', () => {{
             ]
         }
         html = f"""
-<!DOCTYPE html><html><head><meta charset='utf-8'><title>GeoVista Heyelan Risk v5.4</title>
+<!DOCTYPE html><html><head><meta charset='utf-8'><title>GeoVista Heyelan Risk v3.0</title>
 <script src='https://unpkg.com/maplibre-gl@4.1.2/dist/maplibre-gl.js'></script>
 <link href='https://unpkg.com/maplibre-gl@4.1.2/dist/maplibre-gl.css' rel='stylesheet' />
 <style>
@@ -1512,7 +1719,7 @@ body{{margin:0;overflow:hidden;background:#0a1a0a}}
 </style></head><body>
 <div id='map'></div>
 <div class='hud'>
-  <h1>⛰️ HEYELAN RİSK HARİTASI</h1><p>3D Eğim & Toprak Kayması Analizi v5.4</p>
+  <h1>⛰️ HEYELAN RİSK HARİTASI</h1><p>3D Eğim & Toprak Kayması Analizi v3.0</p>
   <div class='row'><span>Eğim Riski</span><b id='rsk' style='color:#4CAF50'>● ANALİZ EDİLİYOR</b></div>
   <div class='row'><span>Yükseklik</span><b id='elv'>---</b></div>
   <div class='bar'></div>
@@ -1530,102 +1737,84 @@ body{{margin:0;overflow:hidden;background:#0a1a0a}}
 <script>
 try{{
 const map = new maplibregl.Map({{
-  container:'map', pitch:72, bearing:30, zoom:13.5,
-  center:[{lon},{lat}],
-  style:'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json'
+  container:'map', pitch:70, bearing:30, zoom:14.2,
+  center:[{lon},{lat}], style:'https://tiles.basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json'
 }});
 
 map.on('load', ()=>{{
-  // TERRAIN: Gerçek yükseklik verisi
+  // Binalar (Karanlık Mod)
+  map.addLayer({{
+    'id':'bld','source':'carto','source-layer':'building','type':'fill-extrusion',
+    'paint':{{
+      'fill-extrusion-color':'#1a2535',
+      'fill-extrusion-height':['coalesce',['get','render_height'],12],
+      'fill-extrusion-opacity':0.85
+    }}
+  }});
+
+  // Arazi Verisi
   map.addSource('terr', {{
     type:'raster-dem',
     tiles:['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{{z}}/{{x}}/{{y}}.png'],
     encoding:'terrarium', tileSize:256
   }});
-  map.setTerrain({{ source:'terr', exaggeration:4.5 }});
-
-  // HILLSHADE: Eğim gölgelendirme (topografya)
-  map.addLayer({{ id:'hs', type:'hillshade', source:'terr',
-    paint:{{'hillshade-exaggeration':0.7,'hillshade-shadow-color':'#1a0a00',
-            'hillshade-highlight-color':'#fff'}}
-  }});
-
-  // HEYELAN RİSK ZONLARI - gerçek Antalya/kampüs çevresi eğimli alanlar
+  map.setTerrain({{ source:'terr', exaggeration:3.5 }});
+  
+  // Risk Bölgeleri (Kesin Ayrılmış)
   const riskZones = {{type:'FeatureCollection',features:[
-    // ÇOK YÜKSEK RİSK - Dağ etekleri / çok dik yamaçlar
-    {{type:'Feature',properties:{{r:'critical',name:'Dağ Eteği Kritik'}},
+    // ÇOK YÜKSEK (Kırmızı)
+    {{type:'Feature',properties:{{r:'critical',name:'ÇOK YÜKSEK RİSK',slope:42,elv:740}},
       geometry:{{type:'Polygon',coordinates:[[
-        [{lon}+0.018,{lat}+0.010],[{lon}+0.040,{lat}+0.010],
-        [{lon}+0.040,{lat}+0.030],[{lon}+0.018,{lat}+0.030],[{lon}+0.018,{lat}+0.010]
+        [{lon}+0.015,{lat}+0.005],[{lon}+0.025,{lat}+0.015],[{lon}+0.035,{lat}+0.005],[{lon}+0.025,{lat}-0.005],[{lon}+0.015,{lat}+0.005]
       ]]}}}},
-    // YÜKSEK RİSK - Orta dik yamaçlar
-    {{type:'Feature',properties:{{r:'high',name:'Yamaç Yüksek Risk'}},
+    // YÜKSEK (Turuncu)
+    {{type:'Feature',properties:{{r:'high',name:'YÜKSEK RİSK',slope:32,elv:520}},
       geometry:{{type:'Polygon',coordinates:[[
-        [{lon}-0.005,{lat}+0.010],[{lon}+0.018,{lat}+0.010],
-        [{lon}+0.018,{lat}+0.025],[{lon}-0.005,{lat}+0.025],[{lon}-0.005,{lat}+0.010]
+        [{lon}-0.01,{lat}+0.005],[{lon}+0.005,{lat}+0.012],[{lon}+0.015,{lat}+0.002],[{lon}-0.005,{lat}-0.005],[{lon}-0.01,{lat}+0.005]
       ]]}}}},
-    // ORTA RİSK - Hafif eğimli geçiş bölgeleri
-    {{type:'Feature',properties:{{r:'mid',name:'Geçiş Bölgesi'}},
+    // ORTA (Sarı)
+    {{type:'Feature',properties:{{r:'mid',name:'ORTA RİSK',slope:22,elv:340}},
       geometry:{{type:'Polygon',coordinates:[[
-        [{lon}-0.020,{lat}+0.003],[{lon}+0.005,{lat}+0.003],
-        [{lon}+0.005,{lat}+0.012],[{lon}-0.020,{lat}+0.012],[{lon}-0.020,{lat}+0.003]
-      ]]}}}},
-    // KAYALIK - Taş/kaya düşme riski
-    {{type:'Feature',properties:{{r:'rocky',name:'Kayalık Alan'}},
-      geometry:{{type:'Polygon',coordinates:[[
-        [{lon}+0.025,{lat}+0.025],[{lon}+0.045,{lat}+0.025],
-        [{lon}+0.045,{lat}+0.045],[{lon}+0.025,{lat}+0.045],[{lon}+0.025,{lat}+0.025]
-      ]]}}}},
-    // GÜVENLİ - Kampüs düz alanlar
-    {{type:'Feature',properties:{{r:'safe',name:'Kampüs Güvenli'}},
-      geometry:{{type:'Polygon',coordinates:[[
-        [{lon}-0.025,{lat}-0.012],[{lon}+0.010,{lat}-0.012],
-        [{lon}+0.010,{lat}+0.005],[{lon}-0.025,{lat}+0.005],[{lon}-0.025,{lat}-0.012]
+        [{lon}-0.02,{lat}-0.015],[{lon}-0.01,{lat}-0.010],[{lon}-0.005,{lat}-0.018],[{lon}-0.02,{lat}-0.022],[{lon}-0.02,{lat}-0.015]
       ]]}}}}
   ]}};
 
+  const safeBase = {{type:'Feature', geometry:{{type:'Polygon',coordinates:[[
+    [{lon}-0.1,{lat}-0.1],[{lon}+0.1,{lat}-0.1],[{lon}+0.1,{lat}+0.1],[{lon}-0.1,{lat}+0.1],[{lon}-0.1,{lat}-0.1]
+  ]]}}}};
+
+  map.addSource('safe-base', {{type:'geojson', data:safeBase}});
+  map.addLayer({{id:'safe-bg', type:'fill', source:'safe-base', paint:{{'fill-color':'#1B5E20','fill-opacity':0.25}}}});
+
   map.addSource('risk', {{type:'geojson', data:riskZones}});
-
-  // 2D RENK OVERLAY
-  map.addLayer({{id:'rfill',type:'fill',source:'risk',paint:{{
-    'fill-color':['match',['get','r'],
-      'critical','#B71C1C','high','#E65100','mid','#F9A825','rocky','#795548','safe','#1B5E20','#333'],
-    'fill-opacity':0.55
+  map.addLayer({{id:'rfill',type:'fill-extrusion',source:'risk',paint:{{
+    'fill-extrusion-height':20,
+    'fill-extrusion-color':['match',['get','r'],'critical','#B71C1C', 'high','#E65100', 'mid','#FFD600', '#333'],
+    'fill-extrusion-opacity':0.7
   }}}});
 
-  // SINIR ÇİZGİLERİ
-  map.addLayer({{id:'rline',type:'line',source:'risk',paint:{{
-    'line-color':['match',['get','r'],
-      'critical','#FF1744','high','#FF6D00','mid','#FFD600','rocky','#BCAAA4','safe','#4CAF50','#fff'],
-    'line-width':2.5,'line-opacity':1.0
-  }}}});
-
-  // ETİKETLER
-  map.addLayer({{id:'rlabel',type:'symbol',source:'risk',layout:{{
-    'text-field':['get','name'],
-    'text-font':['Open Sans Bold','Arial Unicode MS Bold'],
-    'text-size':13,'text-anchor':'center'
-  }},paint:{{'text-color':'#fff','text-halo-color':'rgba(0,0,0,0.8)','text-halo-width':2}}}});
-
-  // HUD Güncelle
-  const risks = {{'critical':'🔴 ÇOK YÜKSEK RİSK','high':'🟠 YÜKSEK RİSK','mid':'🟡 ORTA RİSK','rocky':'🟤 KAYALIK','safe':'🟢 GÜVENLİ'}};
-  const colors = {{'critical':'#FF1744','high':'#FF6D00','mid':'#FFD600','rocky':'#BCAAA4','safe':'#4CAF50'}};
   map.on('mousemove', 'rfill', (e)=>{{
-    const r = e.features[0].properties.r;
-    const el = document.getElementById('rsk');
-    el.innerText = risks[r] || '---';
-    el.style.color = colors[r] || '#fff';
+    const p = e.features[0].properties;
+    document.getElementById('rsk').innerText = p.name;
+    const colors = {{'critical':'#FF5252','high':'#FF9100','mid':'#FFD600'}};
+    document.getElementById('rsk').style.color = colors[p.r] || '#FFF';
+    document.getElementById('elv').innerText = p.elv + ' m (Eğim: ' + p.slope + '°)';
+  }});
+  
+  map.on('mousemove', 'safe-bg', ()=>{{
+    document.getElementById('rsk').innerText = 'GÜVENLİ ALAN';
+    document.getElementById('rsk').style.color = '#66BB6A';
+    document.getElementById('elv').innerText = '--';
   }});
 
-  // Yavaş dönen kamera
-  let bearing = 30;
-  setInterval(()=>{{ map.setBearing(bearing+=0.08); }}, 80);
+  let b = 30;
+  setInterval(()=>{{ map.setBearing(b+=0.06); }}, 100);
 }});
 }}catch(e){{alert('Hata: ' + e.message);}}
 </script></body></html>"""
-        p=tmp_map()
+        p, fname = tmp_map()
         with open(p,"w",encoding="utf-8") as f: f.write(html)
-        webbrowser.open(f"file:///{p}")
+        webbrowser.open(f"http://localhost:{_G_PORT}/gv_maps/{fname}")
         self.sim_status.configure(text="✅ Heyelan Risk Haritası Aktif!")
 
     def _export_disaster(self):
@@ -1686,7 +1875,7 @@ class AboutPage(Page):
         super().__init__(p,**kw); self._build()
 
     def _build(self):
-        self.page_hdr("ℹ️","GeoVista Hakkında","CBS Öğrenci Asistanı v1.0.0")
+        self.page_hdr("ℹ️","GeoVista Hakkında","CBS Profesyonel Analiz Motoru v3.0.0")
         ac=Card(self,title="🌍 GeoVista Nedir?"); ac.pack(fill="x",padx=24,pady=(0,14))
         ctk.CTkLabel(ac,text="GeoVista, coğrafya ve CBS (Coğrafi Bilgi Sistemi) öğrencileri için "
                     "geliştirilmiş ücretsiz, açık kaynaklı bir masaüstü uygulamasıdır. Tamamen ücretsiz "
@@ -1711,13 +1900,13 @@ class AboutPage(Page):
         for k,v in [("💻 Dil","Python 3.8+"),("🎨 Arayüz","CustomTkinter"),
                     ("🗺️ Harita","Folium + Leaflet.js"),("📡 İstekler","Requests"),("🖼️ Görsel","Pillow")]:
             IRow(tc,k,v).pack(fill="x",padx=14,pady=3)
-        ctk.CTkLabel(self,text=f"💙 Coğrafyaya duyulan sevgiyle yapıldı  |  GeoVista v1.0.0  |  {datetime.now().year}",
+        ctk.CTkLabel(self,text=f"💙 Coğrafyaya duyulan sevgiyle yapıldı  |  GeoVista v3.0.0  |  {datetime.now().year}",
                      font=ctk.CTkFont("Segoe UI",11),text_color=C["t3"]).pack(pady=16)
 
 class GeoVista(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("GeoVista — Pro GIS Platform v2.0")
+        self.title("GeoVista — Pro GIS Platform v3.0")
         self.geometry("1350x850")
         self.minsize(1150,750)
         self.configure(fg_color=C["bg"])
@@ -1742,8 +1931,8 @@ class GeoVista(ctk.CTk):
 
         logo=ctk.CTkFrame(sb,fg_color="transparent"); logo.pack(fill="x",pady=(20,8),padx=16)
         ctk.CTkLabel(logo,text="💠",font=ctk.CTkFont(size=40)).pack(anchor="w")
-        ctk.CTkLabel(logo,text="GeoVista Pro",font=ctk.CTkFont("Segoe UI",22,"bold"),text_color=C["primary"]).pack(anchor="w")
-        ctk.CTkLabel(logo,text="V2 Professional GIS",font=ctk.CTkFont("Segoe UI",10,"bold"),text_color=C["sec"]).pack(anchor="w")
+        ctk.CTkLabel(logo,text="GeoVista v3",font=ctk.CTkFont("Segoe UI",22,"bold"),text_color=C["primary"]).pack(anchor="w")
+        ctk.CTkLabel(logo,text="V3 Professional GIS",font=ctk.CTkFont("Segoe UI",10,"bold"),text_color=C["sec"]).pack(anchor="w")
         ctk.CTkFrame(sb,height=1,fg_color=C["border"]).pack(fill="x",padx=16,pady=(10,14))
 
         for icon,label,key in NAV:
@@ -1758,7 +1947,7 @@ class GeoVista(ctk.CTk):
         self.mk_btn(sb,"💾 Projeyi Kaydet",self._save_proj,primary=False).pack(fill="x",padx=15,pady=5)
         self.mk_btn(sb,"📂 Proje Yükle",self._load_proj,primary=False).pack(fill="x",padx=15,pady=5)
 
-        ctk.CTkLabel(sb,text="GeoVista V2.0.0",font=ctk.CTkFont("Segoe UI",10),text_color=C["t3"]).pack(side="bottom",pady=12)
+        ctk.CTkLabel(sb,text="GeoVista v3.0.0",font=ctk.CTkFont("Segoe UI",10),text_color=C["t3"]).pack(side="bottom",pady=12)
 
     def _build_content(self):
         self._content=ctk.CTkFrame(self,fg_color=C["bg"],corner_radius=0)
