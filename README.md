@@ -1,6 +1,6 @@
-# 💠 GeoVista V5.4: Profesyonel CBS (GIS) ve Afet Simülasyon Platformu
+# 💠 GeoVista V3: Profesyonel CBS (GIS) ve Afet Simülasyon Platformu
 
-GeoVista V5.4, coğrafya öğrencileri, CBS profesyonelleri ve afet yönetimi uzmanları için tasarlanmış, yüksek performanslı bir 3D mekânsal analiz ve simülasyon platformudur. Python tabanlı bu uygulama, modern bir arayüz ile gelişmiş 3D görselleştirme teknolojilerini (MapLibre GL JS) birleştirerek afetlerin etkilerini dinamik olarak modelleme imkanı sunar.
+GeoVista V3, coğrafya öğrencileri, CBS profesyonelleri ve afet yönetimi uzmanları için tasarlanmış, yüksek performanslı bir 3D mekânsal analiz ve simülasyon platformudur. Python tabanlı bu uygulama, modern bir arayüz ile gelişmiş 3D görselleştirme teknolojilerini (MapLibre GL JS) birleştirerek afetlerin etkilerini dinamik olarak modelleme imkanı sunar.
 
 ## 🚀 Öne Çıkan Özellikler
 
